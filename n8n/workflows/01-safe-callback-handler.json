@@ -1,0 +1,122 @@
+{
+  "name": "ATS - Safe Callback Handler",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "path": "ats/callbacks",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true,
+          "responseData": "firstEntryJson"
+        },
+        "description": "Verified callback receiver for signed events"
+      }
+    },
+    {
+      "id": "verify",
+      "name": "Verify Signature",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\nconst secret = $env.ATS_N8N_CALLBACK_SECRET || $env.ATS_N8N_INBOUND_TOKEN;\nconst headers = $json.headers || {};\nconst signature = headers['x-ats-signature'] || headers['X-ATS-Signature'] || headers['x-callback-signature'] || headers['X-Callback-Signature'];\nconst rawBody = typeof $json.rawBody === 'string'\n  ? $json.rawBody\n  : JSON.stringify($json.body ?? $json.payload ?? $json);\n\nif (!secret) {\n  throw new Error('Missing n8n callback secret');\n}\n\nif (!signature) {\n  throw new Error('Missing callback signature');\n}\n\nconst digest = 'sha256=' + crypto.createHmac('sha256', secret).update(rawBody).digest('hex');\nif (signature !== digest) {\n  throw new Error('Invalid callback signature');\n}\n\nconst body = $json.body ?? $json.payload ?? $json;\nreturn [{\n  json: {\n    ...body,\n    callback_verified: true,\n    workflow_name: 'safe-callback-handler',\n    route: 'callback',\n    received_at: new Date().toISOString(),\n  }\n}];"
+      }
+    },
+    {
+      "id": "forward",
+      "name": "Forward to Backend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        920,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ATS_API_BASE_URL + '/api/n8n/callbacks' }}",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParametersJson": "={{ JSON.stringify({ Authorization: 'Bearer ' + ($env.ATS_N8N_INBOUND_TOKEN || ''), 'Content-Type': 'application/json', 'X-Workflow-Name': $json.workflow_name || '' }) }}",
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParametersJson": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 120000,
+          "ignoreResponseCode": false,
+          "response": {
+            "responseFormat": "json"
+          }
+        }
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1140,
+        300
+      ],
+      "parameters": {
+        "responseCode": 200,
+        "responseBody": "={{ { accepted: true, verified: true } }}"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Verify Signature",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verify Signature": {
+      "main": [
+        [
+          {
+            "node": "Forward to Backend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Forward to Backend": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "timezone": "UTC",
+    "saveManualExecutions": true,
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all"
+  },
+  "versionId": "1"
+}

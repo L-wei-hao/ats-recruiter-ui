@@ -1,0 +1,158 @@
+{
+  "name": "ATS - Email Drafting Agent",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {
+        "path": "ats/workflows/email-draft",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true,
+          "responseData": "firstEntryJson"
+        },
+        "description": "Inbound event for ATS - Email Drafting Agent"
+      }
+    },
+    {
+      "id": "normalize",
+      "name": "Normalize & Validate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = $json.body ?? $json.payload ?? $json;\nconst required = ['event_type', 'entity_type', 'entity_id'];\nfor (const key of required) {\n  if (!body[key] || String(body[key]).trim() === '') {\n    throw new Error(`Missing required field: ${key}`);\n  }\n}\nreturn [{\n  json: {\n    ...body,\n    request_id: body.request_id || $json.request_id || $json.event_id || null,\n    source: body.source || 'backend',\n    requested_at: body.requested_at || new Date().toISOString(),\n    workflow_name: \"email-draft\",\n    route: \"email_draft\",\n    requires_human_approval: true,\n  }\n}];"
+      }
+    },
+    {
+      "id": "forward",
+      "name": "Forward to Backend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        920,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ATS_API_BASE_URL + '/api/n8n/workflows/email-draft' }}",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParametersJson": "={{ JSON.stringify({ Authorization: 'Bearer ' + ($env.ATS_N8N_INBOUND_TOKEN || ''), 'Content-Type': 'application/json', 'X-Workflow-Name': $json.workflow_name || '' }) }}",
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParametersJson": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 120000,
+          "ignoreResponseCode": false,
+          "response": {
+            "responseFormat": "json"
+          }
+        }
+      }
+    },
+    {
+      "id": "approval",
+      "name": "Require Human Approval",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        710,
+        300
+      ],
+      "parameters": {
+        "keepOnlySet": false,
+        "values": {
+          "string": [
+            {
+              "name": "approval_state",
+              "value": "pending_review"
+            },
+            {
+              "name": "approval_channel",
+              "value": "backend"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1140,
+        300
+      ],
+      "parameters": {
+        "responseCode": 202,
+        "responseBody": "={{ { accepted: true, workflow: \"email-draft\", approval_required: true } }}"
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize & Validate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize & Validate": {
+      "main": [
+        [
+          {
+            "node": "Forward to Backend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Forward to Backend": {
+      "main": [
+        [
+          {
+            "node": "Require Human Approval",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Require Human Approval": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "timezone": "UTC",
+    "saveManualExecutions": true,
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all"
+  },
+  "versionId": "1"
+}

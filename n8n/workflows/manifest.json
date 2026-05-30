@@ -1,0 +1,47 @@
+[
+  {
+    "file": "01-safe-callback-handler.json",
+    "name": "ATS - Safe Callback Handler",
+    "purpose": "Verify and forward signed callbacks."
+  },
+  {
+    "file": "02-notification-dispatch.json",
+    "name": "ATS - Notification Dispatch",
+    "purpose": "Normalize and route business notifications."
+  },
+  {
+    "file": "10-resume-ingestion-agent.json",
+    "name": "ATS - Resume Ingestion Agent",
+    "purpose": "Orchestrate post-upload extraction and review handoff."
+  },
+  {
+    "file": "20-candidate-search-agent.json",
+    "name": "ATS - Candidate Search Agent",
+    "purpose": "Optional asynchronous enrichment for candidate search."
+  },
+  {
+    "file": "30-job-matching-agent.json",
+    "name": "ATS - Job Matching Agent",
+    "purpose": "Optional requirement parsing and explanation enrichment."
+  },
+  {
+    "file": "60-calendar-email-integrations.json",
+    "name": "ATS - Calendar & Email Integrations",
+    "purpose": "Route calendar and email integration events through backend APIs."
+  },
+  {
+    "file": "40-interview-prep-agent.json",
+    "name": "ATS - Interview Prep Agent",
+    "purpose": "Prepare interview briefs and reminders."
+  },
+  {
+    "file": "50-email-drafting-agent.json",
+    "name": "ATS - Email Drafting Agent",
+    "purpose": "Draft emails and require human approval."
+  },
+  {
+    "file": "90-failure-handler.json",
+    "name": "ATS - Failure Handler",
+    "purpose": "Report workflow and provider failures to backend."
+  }
+]

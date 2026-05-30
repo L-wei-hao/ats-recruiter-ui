@@ -1,0 +1,113 @@
+{
+  "name": "ATS - Failure Handler",
+  "nodes": [
+    {
+      "id": "error_trigger",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "normalize_error",
+      "name": "Normalize Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const error = $json.error || {};\nreturn [{\n  json: {\n    workflow_name: 'failure-handler',\n    event_type: 'workflow.failure',\n    error_type: error.name || error.type || 'UnknownError',\n    error_message: error.message || 'Unknown error',\n    execution_id: $json.execution?.id || null,\n    workflow_id: $json.workflow?.id || null,\n    timestamp: new Date().toISOString(),\n  }\n}];"
+      }
+    },
+    {
+      "id": "forward",
+      "name": "Forward to Backend",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        700,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.ATS_API_BASE_URL + '/api/n8n/failures' }}",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParametersJson": "={{ JSON.stringify({ Authorization: 'Bearer ' + ($env.ATS_N8N_INBOUND_TOKEN || ''), 'Content-Type': 'application/json', 'X-Workflow-Name': $json.workflow_name || '' }) }}",
+        "sendBody": true,
+        "contentType": "json",
+        "bodyParametersJson": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 120000,
+          "ignoreResponseCode": false,
+          "response": {
+            "responseFormat": "json"
+          }
+        }
+      }
+    },
+    {
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        940,
+        300
+      ],
+      "parameters": {
+        "responseCode": 200,
+        "responseBody": "={{ { reported: true } }}"
+      }
+    }
+  ],
+  "connections": {
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Error": {
+      "main": [
+        [
+          {
+            "node": "Forward to Backend",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Forward to Backend": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "timezone": "UTC",
+    "saveManualExecutions": true,
+    "saveDataSuccessExecution": "all",
+    "saveDataErrorExecution": "all"
+  },
+  "versionId": "1"
+}
