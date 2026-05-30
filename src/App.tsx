@@ -13,7 +13,6 @@ import {
   isActiveResumeStatus,
   labelForResumeStatus,
   mergeDashboardTotals,
-  progressResumeStatus
 } from './lib/status';
 import { useLiveStatusFeed } from './hooks/useLiveStatusFeed';
 import type {
@@ -30,12 +29,10 @@ import type { DashboardEvent, DashboardTotals } from './lib/status';
 type ActivityState = ActivityItem & { emphasis?: 'info' | 'success' | 'warning' };
 
 const NAV: Array<{ key: ViewKey; label: string; hint: string }> = [
-  { key: 'dashboard', label: 'Dashboard', hint: 'Queue + live status' },
-  { key: 'search', label: 'Search', hint: 'Find candidates fast' },
-  { key: 'candidate', label: 'Profile', hint: 'Resume + evidence' },
-  { key: 'upload', label: 'Upload', hint: 'Start ingestion' },
-  { key: 'verification', label: 'Verification', hint: 'Approve facts' },
-  { key: 'workflows', label: 'Workflows', hint: 'Pipeline views' }
+  { key: 'dashboard', label: 'Ingestion Hub', hint: 'Upload & queues' },
+  { key: 'search', label: 'Talent Engine', hint: 'Search & profiles' },
+  { key: 'verification', label: 'Verification Hub', hint: 'Audit AI facts' },
+  { key: 'workflows', label: 'Automated Pipelines', hint: 'n8n pipelines' }
 ];
 
 const STATUS_OPTIONS = ['all', 'uploaded', 'queued', 'extracting_text', 'structuring', 'chunking', 'embedding', 'indexed', 'needs_review', 'failed'];
@@ -46,10 +43,10 @@ function cloneState<T>(value: T): T {
 }
 
 function statusTone(status: string): string {
-  if (status === 'indexed' || status === 'approved') return 'tone-success';
+  if (status === 'indexed' || status === 'approved' || status === 'complete') return 'tone-success';
   if (status === 'failed' || status === 'rejected') return 'tone-danger';
   if (status === 'needs_review' || status === 'reviewing' || status === 'pending') return 'tone-warning';
-  if (status === 'queued' || isActiveResumeStatus(status)) return 'tone-info';
+  if (status === 'queued' || isActiveResumeStatus(status) || status === 'running') return 'tone-info';
   return 'tone-neutral';
 }
 
@@ -137,7 +134,9 @@ function App() {
   const [totals, setTotals] = useState<DashboardTotals>(cloneState(defaultTotals));
   const [uploadDraft, setUploadDraft] = useState<UploadDraft>(cloneState(initialUploadDraft));
   const [selectedCandidateId, setSelectedCandidateId] = useState(candidateSeed[0].id);
-  const [liveStatus, setLiveStatus] = useState('starting');
+  const [spotlightTab, setSpotlightTab] = useState<'highlights' | 'experience' | 'resumes'>('highlights');
+  const [liveStatus, setLiveStatus] = useState('active');
+  
   const resumeCursor = useRef(0);
   const activeWorkflowCursor = useRef(0);
 
@@ -152,7 +151,7 @@ function App() {
   );
 
   const selectedVerification = useMemo(
-    () => verificationItems.filter((item) => item.status === 'pending').slice(0, 3),
+    () => verificationItems.filter((item) => item.status === 'pending'),
     [verificationItems]
   );
 
@@ -201,7 +200,7 @@ function App() {
           const index = activeWorkflowCursor.current % next.length;
           activeWorkflowCursor.current += 1;
           const workflow = next[index];
-          const progressDelta = Math.max(1, Math.min(15, Math.abs(event.delta)));
+          const progressDelta = Math.max(1, Math.min(15, Math.abs(event.delta ?? 1)));
           if (event.status === 'processing') {
             workflow.progress = Math.min(99, workflow.progress + progressDelta);
             workflow.status = workflow.progress >= 95 ? 'running' : workflow.status;
@@ -227,7 +226,7 @@ function App() {
       { label: 'Processing', value: totals.processing, accent: 'tone-warning' },
       { label: 'Indexed', value: totals.indexed, accent: 'tone-success' },
       { label: 'Failed', value: totals.failed, accent: 'tone-danger' },
-      { label: 'Needs review', value: totals.review, accent: 'tone-neutral' }
+      { label: 'Review Required', value: totals.review, accent: 'tone-neutral' }
     ],
     [totals]
   );
@@ -249,7 +248,7 @@ function App() {
         functionArea: 'AI / Automation',
         industry: 'General',
         verifiedSkills: [],
-        matchScore: 64,
+        matchScore: 78,
         pipelineStage: 'New',
         resumeStatus: 'uploaded',
         highlights: [
@@ -269,7 +268,17 @@ function App() {
           }
         ],
         facts: [],
-        experiences: []
+        experiences: [
+          {
+            id: `exp-new-${Date.now()}`,
+            company: uploadDraft.company.trim() || 'Unspecified',
+            title: uploadDraft.title.trim() || 'Candidate',
+            period: '2025 - Present',
+            functionArea: 'AI / Automation',
+            industry: 'General',
+            summary: 'Awaiting async resume ingestion and deep structure extraction.'
+          }
+        ]
       };
 
       setCandidates((current) => [candidate, ...current]);
@@ -287,7 +296,8 @@ function App() {
         emphasis: 'success'
       });
       setSelectedCandidateId(id);
-      setView('candidate');
+      setSpotlightTab('resumes');
+      setView('search');
       setUploadDraft({ ...initialUploadDraft, fileName: 'resume.pdf' });
       setSearchFilter((current) => ({ ...current, query: uploadDraft.candidateName }));
     },
@@ -320,7 +330,7 @@ function App() {
                       ...fact,
                       value: nextValue ?? item.proposedValue,
                       verified: nextStatus !== 'rejected',
-                      source: 'recruiter'
+                      source: 'recruiter' as const
                     }
                   : fact
               )
@@ -330,7 +340,7 @@ function App() {
                   id: `fact-${Date.now()}`,
                   label: item.factLabel,
                   value: nextValue ?? item.proposedValue,
-                  source: 'recruiter',
+                  source: 'recruiter' as const,
                   verified: nextStatus !== 'rejected',
                   evidence: item.evidence
                 }
@@ -362,491 +372,654 @@ function App() {
     [updateVerificationStatus, verificationItems]
   );
 
-  const candidateCards = useMemo(
-    () =>
-      filteredCandidates.map((candidate) => (
-        <button
-          key={candidate.id}
-          className={`candidate-card ${candidate.id === selectedCandidate?.id ? 'candidate-card--active' : ''}`}
-          onClick={() => {
-            setSelectedCandidateId(candidate.id);
-            setView('candidate');
-          }}
-        >
-          <div className="candidate-card__top">
-            <div>
-              <div className="candidate-card__name">{candidate.name}</div>
-              <div className="candidate-card__subtitle">
-                {candidate.currentTitle} · {candidate.currentCompany}
-              </div>
-            </div>
-            <span className={`badge ${statusTone(candidate.resumeStatus)}`}>{labelForResumeStatus(candidate.resumeStatus)}</span>
-          </div>
-          <div className="candidate-card__meta">
-            <span>{candidate.location}</span>
-            <span>{candidate.functionArea}</span>
-            <span>{formatScore(candidate.matchScore)}</span>
-          </div>
-          <p className="candidate-card__summary">{candidate.highlights[0]}</p>
-        </button>
-      )),
-    [filteredCandidates, selectedCandidate?.id]
-  );
+  const getCandidateInitials = (name: string) => {
+    return name
+      .split(' ')
+      .map((n) => n[0])
+      .join('')
+      .slice(0, 2)
+      .toUpperCase();
+  };
+
+  const getCandidateName = (id: string) => {
+    return candidates.find((c) => c.id === id)?.name ?? 'Unknown';
+  };
+
+  const getCandidateTitle = (id: string) => {
+    const cand = candidates.find((c) => c.id === id);
+    return cand ? `${cand.currentTitle} · ${cand.currentCompany}` : '';
+  };
 
   return (
     <div className="app-shell">
-      <header className="topbar">
+      {/* 1. Left Sidebar Navigation */}
+      <aside className="sidebar-nav">
         <div>
-          <div className="eyebrow">ATS Recruiter UI</div>
-          <h1>Dashboard, search, verification, and live status updates</h1>
-          <p className="lede">
-            Demo recruiter workspace with asynchronous queue visibility, candidate search, human verification,
-            and SSE/polling-style live updates.
-          </p>
-        </div>
-        <div className="topbar__status">
-          <div className="status-chip">
-            <span className={`dot dot--${feedMode}`} />
-            <span>{feedMode.toUpperCase()}</span>
+          <div className="brand-section">
+            <div className="brand-logo">
+              <svg fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" style={{ width: '22px', height: '22px' }}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904 9 21L14.907 18M18 10.5c0 3.5-3.5 6-3.5 6s-3.5-2.5-3.5-6a3.5 3.5 0 1 1 7 0Z" />
+              </svg>
+            </div>
+            <span className="brand-name">ATS Recruit Engine</span>
           </div>
-          <div className="muted">{liveStatus}</div>
+
+          <nav className="nav-links" aria-label="Primary sidebar navigation">
+            {NAV.map((item) => {
+              // Custom SVG paths for premium icons
+              let icon = (
+                <svg fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v6m3-3H9m12 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                </svg>
+              );
+              if (item.key === 'dashboard') {
+                icon = (
+                  <svg fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9.75v6.75m0 0-3-3m3 3 3-3m-8.25 6a9 9 0 1 1 16.5 0" />
+                  </svg>
+                );
+              } else if (item.key === 'search') {
+                icon = (
+                  <svg fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z" />
+                  </svg>
+                );
+              } else if (item.key === 'verification') {
+                icon = (
+                  <svg fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 0 1-1.043 3.296 3.745 3.745 0 0 1-3.296 1.043A3.745 3.745 0 0 1 12 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 0 1-3.296-1.043 3.745 3.745 0 0 1-1.043-3.296A3.745 3.745 0 0 1 3 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 0 1 1.043-3.296 3.746 3.746 0 0 1 3.296-1.043A3.746 3.746 0 0 1 12 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 0 1 3.296 1.043 3.746 3.746 0 0 1 1.043 3.296A3.745 3.745 0 0 1 21 12Z" />
+                  </svg>
+                );
+              } else if (item.key === 'workflows') {
+                icon = (
+                  <svg fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75Z" />
+                  </svg>
+                );
+              }
+              return (
+                <button
+                  key={item.key}
+                  className={`nav-tab ${view === item.key ? 'nav-tab--active' : ''}`}
+                  onClick={() => setView(item.key)}
+                >
+                  {icon}
+                  <span>{item.label}</span>
+                </button>
+              );
+            })}
+          </nav>
         </div>
-      </header>
 
-      <nav className="nav-tabs" aria-label="Primary navigation">
-        {NAV.map((item) => (
-          <button
-            key={item.key}
-            className={`nav-tab ${view === item.key ? 'nav-tab--active' : ''}`}
-            onClick={() => setView(item.key)}
-          >
-            <span>{item.label}</span>
-            <small>{item.hint}</small>
-          </button>
-        ))}
-      </nav>
+        <div className="sidebar-profile">
+          <div className="profile-avatar">WH</div>
+          <div className="profile-info">
+            <span className="profile-name">Loh Wei Hao</span>
+            <span className="profile-role">Recruiter Admin</span>
+          </div>
+        </div>
+      </aside>
 
-      <main className="layout">
-        <section className="main-column">
-          {view === 'dashboard' && (
-            <>
-              <section className="panel panel--hero">
-                <div>
-                  <div className="panel__eyebrow">Recruiter snapshot</div>
-                  <h2>Queue health and candidate movement</h2>
-                </div>
-                <div className="stat-grid">
+      {/* 2. Main Workspace Layout */}
+      <main className="workspace-hub">
+        <header className="hub-header">
+          <div>
+            <div className="panel__eyebrow">ATS recruiter workspace</div>
+            <h1>
+              {view === 'dashboard' && 'Ingestion Hub'}
+              {view === 'search' && 'Talent Engine'}
+              {view === 'verification' && 'Verification Hub'}
+              {view === 'workflows' && 'Automated Pipelines'}
+            </h1>
+            <p>
+              {view === 'dashboard' && 'Upload candidate resumes, monitor live queues, and review background ingest logs.'}
+              {view === 'search' && 'Search profiles with pgvector hybrid matches and deep-dive into candidate highlights & timelines.'}
+              {view === 'verification' && 'Approve, reject, or edit AI-extracted unverified candidate facts.'}
+              {view === 'workflows' && 'Observe active n8n background agents, integrations, and automated pipeline execution.'}
+            </p>
+          </div>
+          <div className="hub-header__status">
+            <div className="status-chip">
+              <span className={`dot dot--${feedMode}`} />
+              <span>{feedMode.toUpperCase()} STREAM</span>
+            </div>
+          </div>
+        </header>
+
+        {/* ==========================================================
+            VIEW: Ingestion Hub (Dashboard + Upload Form)
+            ========================================================== */}
+        {view === 'dashboard' && (
+          <div className="ingestion-hub-grid">
+            <div className="ingestion-hub-left">
+              {/* Form panel */}
+              <section className="glass-panel panel">
+                <div className="panel__eyebrow">Resume Intake</div>
+                <h2>Ingest Resume Document</h2>
+                <form className="upload-form" onSubmit={onUploadSubmit}>
+                  <div className="form-group">
+                    <label htmlFor="candidate-name">Candidate Full Name</label>
+                    <input
+                      id="candidate-name"
+                      className="form-input"
+                      required
+                      value={uploadDraft.candidateName}
+                      onChange={(event) => setUploadDraft((current) => ({ ...current, candidateName: event.target.value }))}
+                      placeholder="e.g. Loh Wei Hao"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="candidate-title">Current Job Title</label>
+                    <input
+                      id="candidate-title"
+                      className="form-input"
+                      value={uploadDraft.title}
+                      onChange={(event) => setUploadDraft((current) => ({ ...current, title: event.target.value }))}
+                      placeholder="e.g. AI Integration Engineer"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="candidate-company">Current Employer</label>
+                    <input
+                      id="candidate-company"
+                      className="form-input"
+                      value={uploadDraft.company}
+                      onChange={(event) => setUploadDraft((current) => ({ ...current, company: event.target.value }))}
+                      placeholder="e.g. Fintech Platform"
+                    />
+                  </div>
+                  <div className="form-group">
+                    <label htmlFor="file-name">Document Filename</label>
+                    <input
+                      id="file-name"
+                      className="form-input"
+                      value={uploadDraft.fileName}
+                      onChange={(event) => setUploadDraft((current) => ({ ...current, fileName: event.target.value }))}
+                      placeholder="resume.pdf"
+                    />
+                  </div>
+                  
+                  <div className="upload-zone" onClick={() => document.getElementById('candidate-name')?.focus()}>
+                    <svg fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0 3 3m-3-3-3 3M6.75 19.5a4.5 4.5 0 0 1-1.41-8.775 5.25 5.25 0 0 1 10.233-2.33 3 3 0 0 1 3.758 3.848A3.752 3.752 0 0 1 18 19.5H6.75Z" />
+                    </svg>
+                    <p>Click details to configure</p>
+                    <span>Ready for parsing & extraction</span>
+                  </div>
+
+                  <button className="btn-primary" type="submit">
+                    <svg fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" style={{ width: '18px', height: '18px' }}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5m-13.5-9L12 3m0 0 4.5 4.5M12 3v13.5" />
+                    </svg>
+                    <span>Upload & Start Ingest</span>
+                  </button>
+                </form>
+              </section>
+            </div>
+
+            <div className="ingestion-hub-right">
+              {/* Queue Snapshot stats */}
+              <section className="glass-panel panel">
+                <div className="panel__eyebrow">Queue Overview</div>
+                <h2>Background Ingestion Metrics</h2>
+                <div className="hero-stats">
                   {stats.map((stat) => (
-                    <article key={stat.label} className={`stat-card ${stat.accent}`}>
+                    <article key={stat.label} className="stat-card">
                       <span>{stat.label}</span>
-                      <strong>{stat.value}</strong>
+                      <strong className={stat.accent}>{stat.value}</strong>
                     </article>
                   ))}
                 </div>
               </section>
 
-              <section className="panel">
-                <div className="panel__header">
+              {/* Live Activity panel */}
+              <section className="glass-panel panel">
+                <div className="hub-section-header">
                   <div>
-                    <div className="panel__eyebrow">Recent activity</div>
-                    <h3>Live status feed</h3>
+                    <div className="panel__eyebrow">System stream</div>
+                    <h3>Live Worker Feed</h3>
                   </div>
-                  <span className="muted">Updated from SSE / polling fallback</span>
+                  <span className="muted" style={{ fontSize: '0.8rem' }}>SSE Auto-reconnect active</span>
                 </div>
-                <div className="activity-list">
-                  {activities.map((activity) => (
-                    <article key={activity.id} className="activity-row">
-                      <div className="activity-row__time">{activity.at}</div>
-                      <div className="activity-row__body">
-                        <div className="activity-row__title">
-                          <strong>{activity.label}</strong>
-                          <span className={`badge ${activity.emphasis ? `tone-${activity.emphasis}` : 'tone-neutral'}`}>
-                            {humanize(activity.kind)}
-                          </span>
+                <div className="live-activity-list">
+                  {activities.map((activity) => {
+                    let accentClass = 'rgba(99, 102, 241, 0.1)';
+                    let strokeColor = 'var(--accent)';
+                    let iconSvg = (
+                      <svg fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" style={{ width: '16px', height: '16px' }}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                      </svg>
+                    );
+                    
+                    if (activity.emphasis === 'success') {
+                      accentClass = 'rgba(16, 185, 129, 0.1)';
+                      strokeColor = 'var(--success)';
+                      iconSvg = (
+                        <svg fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" style={{ width: '16px', height: '16px' }}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 0 1-1.043 3.296 3.745 3.745 0 0 1-3.296 1.043A3.745 3.745 0 0 1 12 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 0 1-3.296-1.043 3.745 3.745 0 0 1-1.043-3.296A3.745 3.745 0 0 1 3 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 0 1 1.043-3.296 3.746 3.746 0 0 1 3.296-1.043A3.746 3.746 0 0 1 12 3" />
+                        </svg>
+                      );
+                    } else if (activity.emphasis === 'warning') {
+                      accentClass = 'rgba(245, 158, 11, 0.1)';
+                      strokeColor = 'var(--warning)';
+                    }
+                    
+                    return (
+                      <article key={activity.id} className="activity-card">
+                        <div className="activity-icon-wrap" style={{ backgroundColor: accentClass, color: strokeColor }}>
+                          {iconSvg}
                         </div>
-                        <p>{activity.detail}</p>
-                      </div>
-                    </article>
-                  ))}
+                        <div className="activity-content">
+                          <div className="activity-header">
+                            <span className="activity-label">{activity.label}</span>
+                            <span className="activity-time">{activity.at}</span>
+                          </div>
+                          <p className="activity-detail">{activity.detail}</p>
+                        </div>
+                      </article>
+                    );
+                  })}
                 </div>
               </section>
+            </div>
+          </div>
+        )}
 
-              <section className="panel">
-                <div className="panel__header">
-                  <div>
-                    <div className="panel__eyebrow">Pipeline view</div>
-                    <h3>Workflow progress</h3>
-                  </div>
-                </div>
-                <div className="workflow-grid">
-                  {workflows.map((workflow) => (
-                    <article key={workflow.id} className="workflow-card">
-                      <div className="workflow-card__top">
-                        <strong>{workflow.name}</strong>
-                        <span className={`badge ${statusTone(workflow.status)}`}>{humanize(workflow.status)}</span>
-                      </div>
-                      <div className="progress">
-                        <span style={{ width: `${workflow.progress}%` }} />
-                      </div>
-                      <p>{workflow.details}</p>
-                      <div className="workflow-card__meta">
-                        <span>Owner: {workflow.owner}</span>
-                        <span>Last run: {workflow.lastRun}</span>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            </>
-          )}
-
-          {view === 'search' && (
-            <section className="panel">
-              <div className="panel__header">
-                <div>
-                  <div className="panel__eyebrow">Search</div>
-                  <h2>Find candidates with structured filters</h2>
-                </div>
-              </div>
-              <div className="filter-bar">
-                <label>
-                  <span>Search</span>
+        {/* ==========================================================
+            VIEW: Talent Engine (Split-Screen Workspace)
+            ========================================================== */}
+        {view === 'search' && (
+          <div className="talent-engine-workspace">
+            {/* Left Pane: Search Controls & Cards scroller */}
+            <div className="search-results-panel">
+              <div className="search-controls">
+                <div className="search-input-wrap">
+                  <svg fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.602 10.602Z" />
+                  </svg>
                   <input
+                    className="search-bar-input"
                     value={searchFilter.query}
                     onChange={(event) => setSearchFilter((current) => ({ ...current, query: event.target.value }))}
-                    placeholder="Try: fintech RAG Singapore"
+                    placeholder="Try: Loh Wei Hao Fintech n8n"
                   />
-                </label>
-                <label>
-                  <span>Status</span>
+                </div>
+                
+                <div className="search-filters-row">
                   <select
+                    className="select-input"
                     value={searchFilter.status}
                     onChange={(event) => setSearchFilter((current) => ({ ...current, status: event.target.value }))}
                   >
                     {STATUS_OPTIONS.map((option) => (
                       <option key={option} value={option}>
-                        {option === 'all' ? 'All statuses' : labelForResumeStatus(option)}
+                        {option === 'all' ? 'All Ingest Statuses' : labelForResumeStatus(option)}
                       </option>
                     ))}
                   </select>
-                </label>
-                <label>
-                  <span>Function area</span>
+
                   <select
+                    className="select-input"
                     value={searchFilter.functionArea}
                     onChange={(event) => setSearchFilter((current) => ({ ...current, functionArea: event.target.value }))}
                   >
                     {FUNCTION_OPTIONS.map((option) => (
                       <option key={option} value={option}>
-                        {option === 'all' ? 'All areas' : option}
+                        {option === 'all' ? 'All Functions' : option}
                       </option>
                     ))}
                   </select>
-                </label>
-                <label className="checkbox-field">
+                </div>
+
+                <label className="checkbox-wrap">
                   <input
                     type="checkbox"
                     checked={searchFilter.verifiedOnly}
                     onChange={(event) => setSearchFilter((current) => ({ ...current, verifiedOnly: event.target.checked }))}
                   />
-                  <span>Verified evidence only</span>
+                  <span>Show only verified evidence</span>
                 </label>
               </div>
-              <div className="search-results">
-                {candidateCards.length ? candidateCards : <div className="empty-state">No candidates match the current filters.</div>}
-              </div>
-            </section>
-          )}
 
-          {view === 'candidate' && selectedCandidate && (
-            <section className="panel">
-              <div className="candidate-hero">
-                <div>
-                  <div className="panel__eyebrow">Candidate profile</div>
-                  <h2>{selectedCandidate.name}</h2>
-                  <p>
-                    {selectedCandidate.currentTitle} · {selectedCandidate.currentCompany} · {selectedCandidate.location}
-                  </p>
-                </div>
-                <div className="candidate-hero__meta">
-                  <span className={`badge ${statusTone(selectedCandidate.resumeStatus)}`}>
-                    {labelForResumeStatus(selectedCandidate.resumeStatus)}
-                  </span>
-                  <span className="score-pill">{formatScore(selectedCandidate.matchScore)} match</span>
-                </div>
-              </div>
-              <div className="chip-row">
-                {selectedCandidate.verifiedSkills.map((skill) => (
-                  <span key={skill} className="chip">
-                    {skill}
-                  </span>
-                ))}
-              </div>
-              <div className="detail-grid">
-                <article className="detail-card">
-                  <h3>Highlights</h3>
-                  <ul>
-                    {selectedCandidate.highlights.map((highlight) => (
-                      <li key={highlight}>{highlight}</li>
-                    ))}
-                  </ul>
-                </article>
-                <article className="detail-card">
-                  <h3>Experience</h3>
-                  <div className="stacked-list">
-                    {selectedCandidate.experiences.map((experience) => (
-                      <div key={experience.id} className="stacked-item">
-                        <strong>{experience.title}</strong>
-                        <span>{experience.company}</span>
-                        <small>{experience.period} · {experience.functionArea} · {experience.industry}</small>
-                        <p>{experience.summary}</p>
+              <div className="candidates-cards-scroller">
+                {filteredCandidates.length ? (
+                  filteredCandidates.map((candidate) => (
+                    <button
+                      key={candidate.id}
+                      className={`candidate-card ${candidate.id === selectedCandidate?.id ? 'candidate-card--active' : ''}`}
+                      onClick={() => setSelectedCandidateId(candidate.id)}
+                    >
+                      <div className="card-topbar">
+                        <div className="card-title-wrap">
+                          <span className="card-name">{candidate.name}</span>
+                          <span className="card-subtitle">{candidate.currentTitle}</span>
+                        </div>
+                        <span className={`badge ${statusTone(candidate.resumeStatus)}`}>
+                          {labelForResumeStatus(candidate.resumeStatus)}
+                        </span>
                       </div>
-                    ))}
-                  </div>
-                </article>
+                      
+                      <p className="card-snippet">{candidate.highlights[0]}</p>
+
+                      <div className="card-tag-row">
+                        <span>{candidate.location} · {candidate.functionArea}</span>
+                        <span className="score-tag">{formatScore(candidate.matchScore)} match</span>
+                      </div>
+                    </button>
+                  ))
+                ) : (
+                  <div className="empty-state">No candidates match current filters</div>
+                )}
               </div>
-              <div className="detail-grid detail-grid--wide">
-                <article className="detail-card">
-                  <h3>Resume versions</h3>
-                  <div className="stacked-list">
-                    {selectedCandidate.resumes.map((resume) => (
-                      <div key={resume.id} className="resume-row">
+            </div>
+
+            {/* Right Pane: Spotlight Deep Dive */}
+            <div className="glass-panel spotlight-profile-panel">
+              {selectedCandidate ? (
+                <div className="spotlight-profile-panel__content">
+                  {/* Hero headers */}
+                  <div className="profile-hero">
+                    <div className="profile-main-meta">
+                      <h2>{selectedCandidate.name}</h2>
+                      <div className="profile-location-row">
+                        <span>{selectedCandidate.currentTitle} · {selectedCandidate.currentCompany}</span>
+                        <span>{selectedCandidate.location}</span>
+                      </div>
+                      <div style={{ marginTop: '6px' }}>
+                        <span className="profile-stage-badge">{selectedCandidate.pipelineStage}</span>
+                      </div>
+                    </div>
+
+                    {/* Radial neon percentage indicator */}
+                    <div className="radial-score-meter">
+                      <div className="circular-indicator">
+                        <svg>
+                          <defs>
+                            <linearGradient id="score-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                              <stop offset="0%" stopColor="var(--accent)" />
+                              <stop offset="100%" stopColor="var(--cyan)" />
+                            </linearGradient>
+                          </defs>
+                          <circle className="bg-circle" cx="22" cy="22" r="18" />
+                          <circle 
+                            className="fg-circle" 
+                            cx="22" 
+                            cy="22" 
+                            r="18" 
+                            strokeDasharray={113}
+                            strokeDashoffset={113 - (113 * selectedCandidate.matchScore) / 100}
+                          />
+                        </svg>
+                        <div style={{ position: 'absolute' }}>
+                          <span className="score-text">{selectedCandidate.matchScore}%</span>
+                        </div>
+                      </div>
+                      <div className="score-label">
+                        <span>Match Rating</span>
+                        <small>pgvector evidence</small>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Profile subtabs */}
+                  <div className="profile-subtabs">
+                    <button 
+                      className={`subtab-btn ${spotlightTab === 'highlights' ? 'subtab-btn--active' : ''}`}
+                      onClick={() => setSpotlightTab('highlights')}
+                    >
+                      Highlights & Info
+                    </button>
+                    <button 
+                      className={`subtab-btn ${spotlightTab === 'experience' ? 'subtab-btn--active' : ''}`}
+                      onClick={() => setSpotlightTab('experience')}
+                    >
+                      Work History
+                    </button>
+                    <button 
+                      className={`subtab-btn ${spotlightTab === 'resumes' ? 'subtab-btn--active' : ''}`}
+                      onClick={() => setSpotlightTab('resumes')}
+                    >
+                      Resumes & Facts
+                    </button>
+                  </div>
+
+                  {/* Dynamic subtab content container */}
+                  <div className="profile-tab-scroller">
+                    {/* SUBTAB: Highlights */}
+                    {spotlightTab === 'highlights' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
                         <div>
-                          <strong>{resume.fileName}</strong>
-                          <div className="muted">{resume.source} · {resume.fileSizeKb} KB · {resume.language.toUpperCase()}</div>
+                          <h4 style={{ fontSize: '0.85rem', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '8px' }}>Highlights</h4>
+                          <ul className="highlights-list">
+                            {selectedCandidate.highlights.map((h, i) => (
+                              <li key={i}>{h}</li>
+                            ))}
+                          </ul>
                         </div>
-                        <div className="resume-row__side">
-                          <span className={`badge ${statusTone(resume.status)}`}>{labelForResumeStatus(resume.status)}</span>
-                          <small>{resume.uploadedAt}</small>
+                        
+                        <div>
+                          <h4 style={{ fontSize: '0.85rem', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '8px' }}>Verified Skills</h4>
+                          <div className="skills-chips-row">
+                            {selectedCandidate.verifiedSkills.length ? (
+                              selectedCandidate.verifiedSkills.map((skill) => (
+                                <span key={skill} className="skill-chip">{skill}</span>
+                              ))
+                            ) : (
+                              <span className="muted" style={{ fontSize: '0.8rem', fontStyle: 'italic' }}>No human-verified skills recorded yet.</span>
+                            )}
+                          </div>
                         </div>
-                        <p>{resume.notes}</p>
                       </div>
-                    ))}
-                  </div>
-                </article>
-                <article className="detail-card">
-                  <h3>Facts and evidence</h3>
-                  <div className="stacked-list">
-                    {selectedCandidate.facts.map((fact) => (
-                      <div key={fact.id} className="fact-row">
-                        <div className="fact-row__top">
-                          <strong>{fact.label}</strong>
-                          <span className={`badge ${fact.verified ? 'tone-success' : 'tone-warning'}`}>
-                            {fact.verified ? 'Verified' : 'Unverified'}
-                          </span>
-                        </div>
-                        <div>{fact.value}</div>
-                        <small className="muted">Source: {fact.source} · {fact.evidence}</small>
+                    )}
+
+                    {/* SUBTAB: Work History timeline */}
+                    {spotlightTab === 'experience' && (
+                      <div className="timeline-wrapper">
+                        {selectedCandidate.experiences.map((exp) => (
+                          <div key={exp.id} className="timeline-item">
+                            <div className="timeline-dot" />
+                            <div className="timeline-header">
+                              <span className="timeline-title">{exp.title}</span>
+                              <span className="timeline-period">{exp.period}</span>
+                            </div>
+                            <div className="timeline-company">{exp.company}</div>
+                            <div className="timeline-meta">{exp.functionArea} · {exp.industry}</div>
+                            <p className="timeline-body">{exp.summary}</p>
+                          </div>
+                        ))}
                       </div>
-                    ))}
+                    )}
+
+                    {/* SUBTAB: Resumes & AI Facts */}
+                    {spotlightTab === 'resumes' && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                        <div>
+                          <h4 style={{ fontSize: '0.85rem', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '8px' }}>Documents</h4>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            {selectedCandidate.resumes.map((res) => (
+                              <div key={res.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '12px', border: '1px solid var(--panel-border)', borderRadius: '12px', background: 'rgba(0,0,0,0.15)' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                                  <strong style={{ fontSize: '0.85rem', color: 'var(--text)' }}>{res.fileName}</strong>
+                                  <span style={{ fontSize: '0.72rem', color: 'var(--muted)' }}>{res.source} · {res.fileSizeKb}KB</span>
+                                </div>
+                                <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px' }}>
+                                  <span className={`badge ${statusTone(res.status)}`}>{labelForResumeStatus(res.status)}</span>
+                                  <small style={{ fontSize: '0.68rem', color: 'var(--muted)' }}>{res.uploadedAt}</small>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        <div>
+                          <h4 style={{ fontSize: '0.85rem', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '8px' }}>Extracted Fact Audit</h4>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            {selectedCandidate.facts.length ? (
+                              selectedCandidate.facts.map((fact) => (
+                                <div key={fact.id} style={{ display: 'flex', flexDirection: 'column', gap: '6px', padding: '12px', border: '1px solid var(--panel-border)', borderRadius: '12px', background: 'rgba(0,0,0,0.1)' }}>
+                                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <strong style={{ fontSize: '0.84rem' }}>{fact.label}</strong>
+                                    <span className={`badge ${fact.verified ? 'tone-success' : 'tone-warning'}`}>
+                                      {fact.verified ? 'Verified' : 'Unverified'}
+                                    </span>
+                                  </div>
+                                  <div style={{ fontSize: '0.82rem', color: 'var(--text)' }}>{fact.value}</div>
+                                  <small style={{ fontSize: '0.72rem', color: 'var(--muted)', lineHeight: '1.3' }}>
+                                    <strong>Source:</strong> {fact.source.toUpperCase()} <br />
+                                    <strong>Evidence:</strong> "{fact.evidence}"
+                                  </small>
+                                </div>
+                              ))
+                            ) : (
+                              <span className="muted" style={{ fontSize: '0.8rem', fontStyle: 'italic' }}>No unverified or verified facts loaded.</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                </article>
-              </div>
-            </section>
-          )}
+                </div>
+              ) : (
+                <div className="spotlight-fallback">
+                  <svg fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M15 9h3.75M15 12h3.75M15 15h3.75M4.5 19.5h15a2.25 2.25 0 0 0 2.25-2.25V6.75A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25v10.5A2.25 2.25 0 0 0 4.5 19.5Zm6-10.125a1.875 1.875 0 1 1-3.75 0 1.875 1.875 0 0 1 3.75 0Zm1.294 6.336a6.721 6.721 0 0 1-3.17.789 6.721 6.721 0 0 1-3.168-.789 3.376 3.376 0 0 1 6.338 0Z" />
+                  </svg>
+                  <p>Select a candidate card from the list to audit profile evidence and milestones</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
-          {view === 'upload' && (
-            <section className="panel">
-              <div className="panel__header">
-                <div>
-                  <div className="panel__eyebrow">Upload</div>
-                  <h2>Start asynchronous resume ingestion</h2>
-                </div>
-              </div>
-              <form className="upload-form" onSubmit={onUploadSubmit}>
-                <label>
-                  <span>Candidate name</span>
-                  <input
-                    required
-                    value={uploadDraft.candidateName}
-                    onChange={(event) => setUploadDraft((current) => ({ ...current, candidateName: event.target.value }))}
-                    placeholder="Jane Doe"
-                  />
-                </label>
-                <label>
-                  <span>Current title</span>
-                  <input
-                    value={uploadDraft.title}
-                    onChange={(event) => setUploadDraft((current) => ({ ...current, title: event.target.value }))}
-                    placeholder="AI Integration Engineer"
-                  />
-                </label>
-                <label>
-                  <span>Current company</span>
-                  <input
-                    value={uploadDraft.company}
-                    onChange={(event) => setUploadDraft((current) => ({ ...current, company: event.target.value }))}
-                    placeholder="Fintech Platform"
-                  />
-                </label>
-                <label>
-                  <span>File name</span>
-                  <input
-                    value={uploadDraft.fileName}
-                    onChange={(event) => setUploadDraft((current) => ({ ...current, fileName: event.target.value }))}
-                    placeholder="resume.pdf"
-                  />
-                </label>
-                <div className="upload-form__actions">
-                  <button className="primary-button" type="submit">
-                    Upload and queue
-                  </button>
-                  <p className="muted">
-                    Uploads immediately create a candidate record, queue a background job, and emit live status updates.
-                  </p>
-                </div>
-              </form>
-            </section>
-          )}
+        {/* ==========================================================
+            VIEW: Verification Hub (Facts auditing deck)
+            ========================================================== */}
+        {view === 'verification' && (
+          <div className="verification-hub-layout">
+            <div className="verification-header-summary">
+              <span className="badge tone-warning">{selectedVerification.length} PENDING AUDITS</span>
+            </div>
 
-          {view === 'verification' && (
-            <section className="panel">
-              <div className="panel__header">
-                <div>
-                  <div className="panel__eyebrow">Verification</div>
-                  <h2>Review AI-extracted facts before they become canonical</h2>
-                </div>
-              </div>
-              <div className="verification-list">
-                {selectedVerification.map((item) => (
-                  <article key={item.id} className="verification-card">
-                    <div className="verification-card__top">
-                      <strong>{item.factLabel}</strong>
-                      <span className={`badge ${statusTone(item.status)}`}>{humanize(item.status)}</span>
+            <div className="verification-list-container">
+              {selectedVerification.length ? (
+                selectedVerification.map((item) => (
+                  <article key={item.id} className="verification-audit-card">
+                    <div className="audit-card-top">
+                      <div className="candidate-mini-profile">
+                        <div className="candidate-avatar">
+                          {getCandidateInitials(getCandidateName(item.candidateId))}
+                        </div>
+                        <div className="candidate-mini-info">
+                          <span className="candidate-mini-name">{getCandidateName(item.candidateId)}</span>
+                          <span className="candidate-mini-title">{getCandidateTitle(item.candidateId)}</span>
+                        </div>
+                      </div>
+                      <span className="audit-tag-badge">{item.source}</span>
                     </div>
-                    <div className="verification-card__value">{item.proposedValue}</div>
-                    <p>{item.evidence}</p>
-                    <div className="verification-card__meta">
-                      <span>Confidence: {Math.round(item.confidence * 100)}%</span>
-                      <span>Source: {item.source}</span>
+
+                    <div className="audit-card-content">
+                      <div className="audit-fact-section">
+                        <span className="audit-label">PROPOSED FACT / CHANGE</span>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                          <span style={{ fontSize: '0.8rem', color: 'var(--muted)', fontWeight: 700 }}>{item.factLabel}</span>
+                          <span className="audit-proposed-value">{item.proposedValue}</span>
+                        </div>
+
+                        <div style={{ marginTop: '12px' }}>
+                          <span className="audit-label">PRODUCER CONFIDENCE</span>
+                          <div className="audit-confidence-wrap">
+                            <div className="confidence-bar-outer">
+                              <div 
+                                className="confidence-bar-inner" 
+                                style={{ width: `${item.confidence * 100}%` }}
+                              />
+                            </div>
+                            <span className="confidence-text">{Math.round(item.confidence * 100)}%</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="audit-evidence-citation">
+                        <span>Parser Evidence Citation</span>
+                        <p>"{item.evidence}"</p>
+                      </div>
                     </div>
-                    <div className="action-row">
-                      <button type="button" onClick={() => updateVerificationStatus(item.id, 'approved')}>
-                        Approve
+
+                    <div className="audit-card-actions">
+                      <button 
+                        className="btn-audit btn-audit--approve" 
+                        type="button" 
+                        onClick={() => updateVerificationStatus(item.id, 'approved')}
+                      >
+                        Approve Change
                       </button>
-                      <button type="button" onClick={() => updateVerificationStatus(item.id, 'rejected')}>
-                        Reject
+                      <button 
+                        className="btn-audit" 
+                        type="button" 
+                        onClick={() => handleEditVerification(item.id)}
+                      >
+                        Edit Fact
                       </button>
-                      <button type="button" onClick={() => handleEditVerification(item.id)}>
-                        Edit
+                      <button 
+                        className="btn-audit btn-audit--reject" 
+                        type="button" 
+                        onClick={() => updateVerificationStatus(item.id, 'rejected')}
+                      >
+                        Reject Proposed
                       </button>
                     </div>
                   </article>
-                ))}
-              </div>
-            </section>
-          )}
+                ))
+              ) : (
+                <div className="empty-state" style={{ padding: '60px' }}>
+                  <svg fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" style={{ width: '40px', height: '40px', color: 'var(--success)', marginBottom: '8px' }}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 0 1-1.043 3.296 3.745 3.745 0 0 1-3.296 1.043A3.745 3.745 0 0 1 12 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 0 1-3.296-1.043 3.745 3.745 0 0 1-1.043-3.296A3.745 3.745 0 0 1 3 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 0 1 1.043-3.296 3.746 3.746 0 0 1 3.296-1.043A3.746 3.746 0 0 1 12 3" />
+                  </svg>
+                  <h3>All Caught Up!</h3>
+                  <p>All AI-extracted profile facts have been audited by a recruiter.</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
-          {view === 'workflows' && (
-            <section className="panel">
-              <div className="panel__header">
-                <div>
-                  <div className="panel__eyebrow">Workflows</div>
-                  <h2>Recruiter processes and automation status</h2>
+        {/* ==========================================================
+            VIEW: Automated Pipelines (workflows)
+            ========================================================== */}
+        {view === 'workflows' && (
+          <div className="workflows-hub-grid">
+            {workflows.map((wf) => (
+              <article key={wf.id} className="workflow-card">
+                <div className="workflow-card-top">
+                  <div className="workflow-name-wrap">
+                    <span className="workflow-title">{wf.name}</span>
+                    <span className="workflow-owner">Orchestrator: {wf.owner}</span>
+                  </div>
+                  <span className={`badge ${statusTone(wf.status)}`}>
+                    {wf.status === 'running' ? 'Active' : humanize(wf.status)}
+                  </span>
                 </div>
-              </div>
-              <div className="workflow-list workflow-list--stacked">
-                {workflows.map((workflow) => (
-                  <article key={workflow.id} className="workflow-card workflow-card--wide">
-                    <div className="workflow-card__top">
-                      <strong>{workflow.name}</strong>
-                      <span className={`badge ${statusTone(workflow.status)}`}>{humanize(workflow.status)}</span>
-                    </div>
-                    <div className="progress">
-                      <span style={{ width: `${workflow.progress}%` }} />
-                    </div>
-                    <p>{workflow.details}</p>
-                    <div className="workflow-card__meta">
-                      <span>Owner: {workflow.owner}</span>
-                      <span>Last run: {workflow.lastRun}</span>
-                      <span>Progress: {workflow.progress}%</span>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </section>
-          )}
-        </section>
 
-        <aside className="side-column">
-          <section className="panel panel--sticky">
-            <div className="panel__header">
-              <div>
-                <div className="panel__eyebrow">Candidate spotlight</div>
-                <h3>{selectedCandidate?.name ?? 'No candidate selected'}</h3>
-              </div>
-            </div>
-            {selectedCandidate ? (
-              <>
-                <div className="spotlight-metric">
-                  <span>Pipeline stage</span>
-                  <strong>{selectedCandidate.pipelineStage}</strong>
+                <div className="workflow-progress-section">
+                  <div className="workflow-progress-labels">
+                    <span>Task Progress</span>
+                    <span>{wf.progress}%</span>
+                  </div>
+                  <div className="progress-bar-outer">
+                    <div className="progress-bar-inner" style={{ width: `${wf.progress}%` }} />
+                  </div>
                 </div>
-                <div className="spotlight-metric">
-                  <span>Resume status</span>
-                  <strong>{labelForResumeStatus(selectedCandidate.resumeStatus)}</strong>
-                </div>
-                <div className="spotlight-metric">
-                  <span>Function area</span>
-                  <strong>{selectedCandidate.functionArea}</strong>
-                </div>
-                <div className="spotlight-metric">
-                  <span>Industry</span>
-                  <strong>{selectedCandidate.industry}</strong>
-                </div>
-                <div className="spotlight-metric">
-                  <span>Verification count</span>
-                  <strong>{selectedCandidate.facts.filter((fact) => fact.verified).length} verified</strong>
-                </div>
-                <button className="secondary-button" type="button" onClick={() => setView('candidate')}>
-                  Open full profile
-                </button>
-              </>
-            ) : (
-              <p className="muted">Select a candidate from search to inspect resumes, facts, and evidence.</p>
-            )}
-          </section>
 
-          <section className="panel">
-            <div className="panel__header">
-              <div>
-                <div className="panel__eyebrow">Queue health</div>
-                <h3>Throughput snapshot</h3>
-              </div>
-            </div>
-            <div className="metric-list">
-              {stats.map((stat) => (
-                <div key={stat.label} className="metric-row">
-                  <span>{stat.label}</span>
-                  <strong>{stat.value}</strong>
-                </div>
-              ))}
-            </div>
-          </section>
+                <p className="workflow-details-p">{wf.details}</p>
 
-          <section className="panel">
-            <div className="panel__header">
-              <div>
-                <div className="panel__eyebrow">Live status</div>
-                <h3>Feed details</h3>
-              </div>
-            </div>
-            <div className="live-box">
-              <div className="live-box__row">
-                <span>Mode</span>
-                <strong>{feedMode.toUpperCase()}</strong>
-              </div>
-              <div className="live-box__row">
-                <span>Status</span>
-                <strong>{liveStatus}</strong>
-              </div>
-              <div className="live-box__row">
-                <span>Selected view</span>
-                <strong>{humanize(view)}</strong>
-              </div>
-            </div>
-          </section>
-        </aside>
+                <div className="workflow-footer">
+                  <span>n8n execution</span>
+                  <span>Last run: {wf.lastRun}</span>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
       </main>
     </div>
   );

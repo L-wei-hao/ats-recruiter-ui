@@ -73,8 +73,9 @@ export function mergeDashboardTotals(
 
   const next = { ...totals };
   if (event.kind === 'background_job.updated') {
-    if (event.status in next) {
-      next[event.status] = clampTotal(next[event.status] + event.delta);
+    const statusKey = event.status as keyof DashboardTotals;
+    if (statusKey in next) {
+      next[statusKey] = clampTotal(next[statusKey] + (event.delta ?? 1));
     }
     return next;
   }
